@@ -16,7 +16,7 @@ migrations:
     port: "5432"
     database: "postgres"
     user: "postgres"
-    password: "changeme"  # Should be overridden via values or secrets
+    password: "password"  # Should be overridden via values or secrets
 
   # Migrations job behavior settings
   backoffLimit: 3  # Number of retries before marking job as failed
@@ -39,7 +39,7 @@ job:
     port: "5432"
     database: "postgres"
     user: "postgres"
-    password: "changeme"  # Should be overridden via values or secrets
+    password: "password"  # Should be overridden via values or secrets
 
   # Job behavior settings
   backoffLimit: 3  # Number of retries before marking job as failed
@@ -141,8 +141,8 @@ postgresql:
     argocd.argoproj.io/sync-wave: "0"
   # Additional PostgreSQL values can be configured here
   # For example:
-  # auth:
-  #   postgresPassword: "changeme"
+  auth:
+    postgresPassword: "password"
   #   database: "mydb"
   # primary:
   #   persistence:
@@ -161,7 +161,7 @@ rabbitmq:
     argocd.argoproj.io/sync-wave: "0"
   # Additional RabbitMQ values can be configured here
   # For example:
-  # auth:
+  auth:
+    password: "password"
   #   username: "myuser"
-  #   password: "mypassword"
   #   erlangCookie: "changeme"
