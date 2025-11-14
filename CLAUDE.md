@@ -54,7 +54,10 @@ The chart deploys these Kubernetes resources:
 
 - **Migrations Job**: Runs SQL migrations to create database schema and sample data
 - **Test Job**: Verifies migrations were applied correctly
+- **Cleanup Job** (optional): Deletes the ArgoCD Application after successful tests
 - **ServiceAccount**: Dedicated pod identity for jobs
+- **Role/RoleBinding**: Permissions to get job status (when cleanup enabled)
+- **ClusterRole/ClusterRoleBinding**: Permissions to delete ArgoCD applications (when cleanup enabled)
 
 ### Template Structure
 
@@ -112,7 +115,16 @@ All configuration is driven by `values.yaml`. Key sections:
 3. Exits with code 0 if all tests pass, 1 on any failure
 4. Automatically cleaned up 5 minutes after completion
 
-Both jobs use the official PostgreSQL Alpine image which includes `psql` and `pg_isready` utilities.
+#### Cleanup Job ([templates/cleanup-job.yaml](templates/cleanup-job.yaml)) - Optional
+1. Waits for test job to complete successfully (300 second timeout by default)
+2. Checks test job status using `kubectl get job`
+3. If tests passed, deletes the ArgoCD Application using `kubectl delete application`
+4. If tests failed, exits without deleting the application
+5. Automatically cleaned up 1 minute after completion
+
+**Note**: The cleanup job is disabled by default. Set `cleanup.enabled: true` to enable it.
+
+The migrations and test jobs use the official PostgreSQL Alpine image. The cleanup job uses the Bitnami kubectl image.
 
 ## Important Files
 
@@ -131,22 +143,26 @@ The chart is configured with ArgoCD sync waves to demonstrate a complete migrati
 
 ### Sync Wave Strategy
 
-- **Wave 0**: ServiceAccount, PostgreSQL, and RabbitMQ (if enabled) deploy first and become healthy
+- **Wave 0**: ServiceAccount, RBAC (Role/RoleBinding/ClusterRole/ClusterRoleBinding), PostgreSQL, and RabbitMQ (if enabled) deploy first and become healthy
 - **Wave 1**: Migrations Job runs and creates database schema + sample data
 - **Wave 2**: Test Job verifies migrations were applied correctly
+- **Wave 3**: Cleanup Job (if enabled) deletes the ArgoCD Application after successful tests
 
 This ensures:
-1. Database is fully ready before migrations run
+1. Database and permissions are fully ready before migrations run
 2. Migrations complete successfully before tests run
 3. Tests validate the entire migration workflow
+4. Cleanup only happens after tests pass successfully
 
 ### Configuration
 
 Sync waves are configured via annotations in the templates:
 
 - **ServiceAccount** ([templates/serviceaccount.yaml:9](templates/serviceaccount.yaml#L9)): `sync-wave: "0"`
+- **RBAC Resources** ([templates/role.yaml](templates/role.yaml), [templates/rolebinding.yaml](templates/rolebinding.yaml)): `sync-wave: "0"`
 - **Migrations Job** ([templates/migrations-job.yaml:9](templates/migrations-job.yaml#L9)): `sync-wave: "1"` (customizable via `argocd.migrations.syncWave` in values.yaml)
 - **Test Job** ([templates/job.yaml:9](templates/job.yaml#L9)): `sync-wave: "2"` (customizable via `argocd.job.syncWave` in values.yaml)
+- **Cleanup Job** ([templates/cleanup-job.yaml:9](templates/cleanup-job.yaml#L9)): `sync-wave: "3"` (customizable via `argocd.cleanup.syncWave` in values.yaml, only created if `cleanup.enabled: true`)
 
 Dependencies (PostgreSQL and RabbitMQ) use `commonAnnotations` in values.yaml to set `sync-wave: "0"` on all their resources.
 
@@ -160,12 +176,20 @@ argocd:
     syncWave: 1  # Run migrations in wave 1 (default)
   job:
     syncWave: 2  # Run tests in wave 2 (default)
+  cleanup:
+    syncWave: 3  # Run cleanup in wave 3 (default)
+
+cleanup:
+  enabled: true  # Enable automatic cleanup after successful tests
+  applicationName: "load-chart"  # Name of ArgoCD Application to delete
+  applicationNamespace: "argocd"  # Namespace where ArgoCD runs
 ```
 
 ArgoCD will wait for each wave to become healthy before proceeding to the next wave. This ensures:
 - PostgreSQL is fully ready (StatefulSet healthy, pods running, health checks passing) before migrations execute
 - Migrations complete successfully (Job status: Completed) before tests run
 - Tests validate the complete migration workflow
+- Cleanup only runs after tests pass, and deletes the ArgoCD Application which triggers removal of all resources
 
 ### Example ArgoCD Application
 

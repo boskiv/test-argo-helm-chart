@@ -45,6 +45,25 @@ job:
   backoffLimit: 3  # Number of retries before marking job as failed
   ttlSecondsAfterFinished: 300  # Delete job 5 minutes after completion
 
+# Cleanup job configuration - removes ArgoCD application after successful tests
+cleanup:
+  enabled: false  # Set to true to enable automatic cleanup
+
+  # Cleanup job image (kubectl client)
+  image:
+    repository: bitnami/kubectl
+    tag: "1.31"
+    pullPolicy: IfNotPresent
+
+  # ArgoCD Application details
+  applicationName: "load-chart"  # Name of the ArgoCD Application to delete
+  applicationNamespace: "argocd"  # Namespace where ArgoCD Application exists
+
+  # Cleanup job behavior settings
+  backoffLimit: 2  # Number of retries before marking job as failed
+  ttlSecondsAfterFinished: 60  # Delete job 1 minute after completion
+  waitTimeout: 300  # Maximum time to wait for test job to complete (seconds)
+
 # This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
 imagePullSecrets: []
 # This is to override the chart name.
@@ -108,6 +127,10 @@ argocd:
     # Sync wave for the test job (default: 2)
     # Tests run after migrations complete successfully
     syncWave: 2
+  cleanup:
+    # Sync wave for the cleanup job (default: 3)
+    # Cleanup runs after tests complete successfully
+    syncWave: 3
 
 # PostgreSQL dependency configuration
 # More information: https://github.com/bitnami/charts/tree/main/bitnami/postgresql

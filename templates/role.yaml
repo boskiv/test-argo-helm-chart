@@ -1,0 +1,31 @@
+{{- if and .Values.serviceAccount.create .Values.cleanup.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "load-chart.fullname" . }}
+  labels:
+    {{- include "load-chart.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+rules:
+  # Allow getting job status
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch"]
+{{- end }}
+---
+{{- if and .Values.serviceAccount.create .Values.cleanup.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "load-chart.fullname" . }}-argocd-cleanup
+  labels:
+    {{- include "load-chart.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+rules:
+  # Allow deleting ArgoCD applications
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "delete"]
+{{- end }}
