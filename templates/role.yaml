@@ -27,5 +27,5 @@ rules:
   # Allow deleting ArgoCD applications
   - apiGroups: ["argoproj.io"]
     resources: ["applications"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "delete", "watch"]
 {{- end }}
