@@ -20,6 +20,8 @@ spec:
     helm:
       releaseName: load-chart
       values: |
+        cleanup:
+          enabled: true
         migrations:
           postgres:
             password: postgres123

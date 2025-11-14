@@ -52,7 +52,6 @@ cleanup:
   # Cleanup job image (kubectl client)
   image:
     repository: bitnami/kubectl
-    tag: "1.31"
     pullPolicy: IfNotPresent
 
   # ArgoCD Application details
