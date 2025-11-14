@@ -21,9 +21,9 @@ spec:
       releaseName: load-chart
       values: |
         rabbitmq:
-          enabled: false
+          enabled: true
         postgresql:
-          enabled: false
+          enabled: true
       # Values file overrides (optional)
       # valueFiles:
       #   - values.yaml

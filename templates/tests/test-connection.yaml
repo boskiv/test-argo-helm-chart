@@ -1,3 +1,4 @@
+{{- if .Values.postgresql.enabled }}
 apiVersion: v1
 kind: Pod
 metadata:
@@ -8,8 +9,14 @@ metadata:
     "helm.sh/hook": test
 spec:
   containers:
-    - name: wget
-      image: busybox
-      command: ['wget']
-      args: ['{{ include "load-chart.fullname" . }}:{{ .Values.service.port }}']
+    - name: postgres-test
+      image: "{{ .Values.job.image.repository }}:{{ .Values.job.image.tag }}"
+      command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Testing PostgreSQL connectivity..."
+          pg_isready -h {{ .Values.job.postgres.host }} -p {{ .Values.job.postgres.port }} -U {{ .Values.job.postgres.user }}
+          exit $?
   restartPolicy: Never
+{{- end }}
