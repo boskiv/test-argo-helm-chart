@@ -18,38 +18,14 @@ spec:
 
     # Helm-specific configuration
     helm:
-      releaseName: load-chart
       values: |
         cleanup:
           enabled: true
-        migrations:
-          postgres:
-            password: postgres123
-        job:
-          postgres:
-            password: postgres123
         rabbitmq:
           enabled: false
         postgresql:
           enabled: true
-          auth:
-            postgresPassword: postgres123
-      # Values file overrides (optional)
-      # valueFiles:
-      #   - values.yaml
-
-      # Inline value overrides (optional)
-      # values: |
-      #   replicaCount: 2
-      #   image:
-      #     repository: your-app
-      #     tag: "1.0.0"
-
-      # Parameter overrides (optional)
-      # parameters:
-      #   - name: replicaCount
-      #     value: "2"
-
+        
   # Destination cluster and namespace
   destination:
     server: https://kubernetes.default.svc  # In-cluster deployment
