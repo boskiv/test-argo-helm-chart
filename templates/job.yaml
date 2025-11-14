@@ -1,11 +1,12 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "load-chart.fullname" . }}
+  name: {{ include "load-chart.fullname" . }}-test
   labels:
     {{- include "load-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
   annotations:
-    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-wave: "2"
     {{- with .Values.argocd.job.syncWave }}
     argocd.argoproj.io/sync-wave: {{ . | quote }}
     {{- end }}
@@ -47,14 +48,16 @@ spec:
             - /bin/sh
             - -c
             - |
-              echo "Testing PostgreSQL connection..."
+              echo "==================================="
+              echo "PostgreSQL Migration Verification"
+              echo "==================================="
               echo "Host: {{ .Values.job.postgres.host }}"
               echo "Port: {{ .Values.job.postgres.port }}"
               echo "Database: {{ .Values.job.postgres.database }}"
               echo "User: {{ .Values.job.postgres.user }}"
               echo ""
 
-              # Wait for PostgreSQL to be ready (with timeout)
+              # Wait for PostgreSQL to be ready
               echo "Waiting for PostgreSQL to be ready..."
               TIMEOUT=30
               ELAPSED=0
@@ -69,28 +72,134 @@ spec:
                 ELAPSED=$((ELAPSED + 2))
               done
 
-              echo "PostgreSQL is ready!"
+              echo "✓ PostgreSQL is ready!"
               echo ""
 
-              # Execute SELECT 1 query
-              echo "Executing: SELECT 1;"
+              # Test 1: Basic connectivity
+              echo "Test 1: Basic connectivity (SELECT 1)..."
               PGPASSWORD="{{ .Values.job.postgres.password }}" psql \
                 -h {{ .Values.job.postgres.host }} \
                 -p {{ .Values.job.postgres.port }} \
                 -U {{ .Values.job.postgres.user }} \
                 -d {{ .Values.job.postgres.database }} \
                 -c "SELECT 1;" \
-                -t
+                -t > /dev/null
 
               if [ $? -eq 0 ]; then
-                echo ""
-                echo "SUCCESS: PostgreSQL connection test passed!"
-                exit 0
+                echo "✓ Basic connectivity test passed"
               else
-                echo ""
-                echo "ERROR: PostgreSQL connection test failed!"
+                echo "✗ Basic connectivity test failed"
                 exit 1
               fi
+
+              # Test 2: Verify users table exists
+              echo ""
+              echo "Test 2: Verifying 'users' table exists..."
+              TABLE_EXISTS=$(PGPASSWORD="{{ .Values.job.postgres.password }}" psql \
+                -h {{ .Values.job.postgres.host }} \
+                -p {{ .Values.job.postgres.port }} \
+                -U {{ .Values.job.postgres.user }} \
+                -d {{ .Values.job.postgres.database }} \
+                -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='users';")
+
+              if [ $(echo $TABLE_EXISTS | tr -d ' ') -eq 1 ]; then
+                echo "✓ Users table exists"
+              else
+                echo "✗ Users table does not exist"
+                exit 1
+              fi
+
+              # Test 3: Verify products table exists
+              echo ""
+              echo "Test 3: Verifying 'products' table exists..."
+              TABLE_EXISTS=$(PGPASSWORD="{{ .Values.job.postgres.password }}" psql \
+                -h {{ .Values.job.postgres.host }} \
+                -p {{ .Values.job.postgres.port }} \
+                -U {{ .Values.job.postgres.user }} \
+                -d {{ .Values.job.postgres.database }} \
+                -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='products';")
+
+              if [ $(echo $TABLE_EXISTS | tr -d ' ') -eq 1 ]; then
+                echo "✓ Products table exists"
+              else
+                echo "✗ Products table does not exist"
+                exit 1
+              fi
+
+              # Test 4: Verify orders table exists
+              echo ""
+              echo "Test 4: Verifying 'orders' table exists..."
+              TABLE_EXISTS=$(PGPASSWORD="{{ .Values.job.postgres.password }}" psql \
+                -h {{ .Values.job.postgres.host }} \
+                -p {{ .Values.job.postgres.port }} \
+                -U {{ .Values.job.postgres.user }} \
+                -d {{ .Values.job.postgres.database }} \
+                -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='orders';")
+
+              if [ $(echo $TABLE_EXISTS | tr -d ' ') -eq 1 ]; then
+                echo "✓ Orders table exists"
+              else
+                echo "✗ Orders table does not exist"
+                exit 1
+              fi
+
+              # Test 5: Verify sample data exists
+              echo ""
+              echo "Test 5: Verifying sample data..."
+              USER_COUNT=$(PGPASSWORD="{{ .Values.job.postgres.password }}" psql \
+                -h {{ .Values.job.postgres.host }} \
+                -p {{ .Values.job.postgres.port }} \
+                -U {{ .Values.job.postgres.user }} \
+                -d {{ .Values.job.postgres.database }} \
+                -t -c "SELECT COUNT(*) FROM users;")
+
+              PRODUCT_COUNT=$(PGPASSWORD="{{ .Values.job.postgres.password }}" psql \
+                -h {{ .Values.job.postgres.host }} \
+                -p {{ .Values.job.postgres.port }} \
+                -U {{ .Values.job.postgres.user }} \
+                -d {{ .Values.job.postgres.database }} \
+                -t -c "SELECT COUNT(*) FROM products;")
+
+              echo "  Users found: $(echo $USER_COUNT | tr -d ' ')"
+              echo "  Products found: $(echo $PRODUCT_COUNT | tr -d ' ')"
+
+              if [ $(echo $USER_COUNT | tr -d ' ') -ge 2 ] && [ $(echo $PRODUCT_COUNT | tr -d ' ') -ge 2 ]; then
+                echo "✓ Sample data verification passed"
+              else
+                echo "✗ Sample data verification failed"
+                exit 1
+              fi
+
+              # Test 6: Verify foreign key relationships
+              echo ""
+              echo "Test 6: Verifying foreign key constraints..."
+              FK_COUNT=$(PGPASSWORD="{{ .Values.job.postgres.password }}" psql \
+                -h {{ .Values.job.postgres.host }} \
+                -p {{ .Values.job.postgres.port }} \
+                -U {{ .Values.job.postgres.user }} \
+                -d {{ .Values.job.postgres.database }} \
+                -t -c "SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_type='FOREIGN KEY' AND table_name='orders';")
+
+              if [ $(echo $FK_COUNT | tr -d ' ') -eq 2 ]; then
+                echo "✓ Foreign key constraints verified (2 found)"
+              else
+                echo "✗ Foreign key constraints verification failed"
+                exit 1
+              fi
+
+              echo ""
+              echo "==================================="
+              echo "✓ ALL TESTS PASSED!"
+              echo "==================================="
+              echo ""
+              echo "Migration verification summary:"
+              echo "  - PostgreSQL connectivity: OK"
+              echo "  - Database schema: OK (3 tables)"
+              echo "  - Sample data: OK"
+              echo "  - Referential integrity: OK"
+              echo ""
+
+              exit 0
           env:
             - name: PGPASSWORD
               value: {{ .Values.job.postgres.password | quote }}

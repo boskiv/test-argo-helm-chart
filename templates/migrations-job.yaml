@@ -1,0 +1,223 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "load-chart.fullname" . }}-migrations
+  labels:
+    {{- include "load-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    {{- with .Values.argocd.migrations.syncWave }}
+    argocd.argoproj.io/sync-wave: {{ . | quote }}
+    {{- end }}
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.migrations.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "load-chart.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migrations
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "load-chart.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrations
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.migrations.image.repository }}:{{ .Values.migrations.image.tag }}"
+          imagePullPolicy: {{ .Values.migrations.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "==================================="
+              echo "PostgreSQL Database Migrations"
+              echo "==================================="
+              echo "Host: {{ .Values.migrations.postgres.host }}"
+              echo "Port: {{ .Values.migrations.postgres.port }}"
+              echo "Database: {{ .Values.migrations.postgres.database }}"
+              echo "User: {{ .Values.migrations.postgres.user }}"
+              echo ""
+
+              # Wait for PostgreSQL to be ready
+              echo "Waiting for PostgreSQL to be ready..."
+              TIMEOUT=60
+              ELAPSED=0
+
+              until pg_isready -h {{ .Values.migrations.postgres.host }} -p {{ .Values.migrations.postgres.port }} -U {{ .Values.migrations.postgres.user }} > /dev/null 2>&1; do
+                if [ $ELAPSED -ge $TIMEOUT ]; then
+                  echo "ERROR: PostgreSQL is not ready after ${TIMEOUT} seconds"
+                  exit 1
+                fi
+                echo "PostgreSQL is unavailable - waiting... (${ELAPSED}s/${TIMEOUT}s)"
+                sleep 2
+                ELAPSED=$((ELAPSED + 2))
+              done
+
+              echo "PostgreSQL is ready!"
+              echo ""
+
+              # Run migrations
+              echo "==================================="
+              echo "Running Database Migrations"
+              echo "==================================="
+
+              # Migration 1: Create users table
+              echo "Migration 1: Creating 'users' table..."
+              PGPASSWORD="{{ .Values.migrations.postgres.password }}" psql \
+                -h {{ .Values.migrations.postgres.host }} \
+                -p {{ .Values.migrations.postgres.port }} \
+                -U {{ .Values.migrations.postgres.user }} \
+                -d {{ .Values.migrations.postgres.database }} \
+                -c "CREATE TABLE IF NOT EXISTS users (
+                  id SERIAL PRIMARY KEY,
+                  username VARCHAR(50) UNIQUE NOT NULL,
+                  email VARCHAR(100) UNIQUE NOT NULL,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );"
+
+              if [ $? -eq 0 ]; then
+                echo "✓ Users table created successfully"
+              else
+                echo "✗ Failed to create users table"
+                exit 1
+              fi
+
+              # Migration 2: Create products table
+              echo ""
+              echo "Migration 2: Creating 'products' table..."
+              PGPASSWORD="{{ .Values.migrations.postgres.password }}" psql \
+                -h {{ .Values.migrations.postgres.host }} \
+                -p {{ .Values.migrations.postgres.port }} \
+                -U {{ .Values.migrations.postgres.user }} \
+                -d {{ .Values.migrations.postgres.database }} \
+                -c "CREATE TABLE IF NOT EXISTS products (
+                  id SERIAL PRIMARY KEY,
+                  name VARCHAR(100) NOT NULL,
+                  price DECIMAL(10,2) NOT NULL,
+                  stock INTEGER DEFAULT 0,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );"
+
+              if [ $? -eq 0 ]; then
+                echo "✓ Products table created successfully"
+              else
+                echo "✗ Failed to create products table"
+                exit 1
+              fi
+
+              # Migration 3: Create orders table
+              echo ""
+              echo "Migration 3: Creating 'orders' table..."
+              PGPASSWORD="{{ .Values.migrations.postgres.password }}" psql \
+                -h {{ .Values.migrations.postgres.host }} \
+                -p {{ .Values.migrations.postgres.port }} \
+                -U {{ .Values.migrations.postgres.user }} \
+                -d {{ .Values.migrations.postgres.database }} \
+                -c "CREATE TABLE IF NOT EXISTS orders (
+                  id SERIAL PRIMARY KEY,
+                  user_id INTEGER REFERENCES users(id),
+                  product_id INTEGER REFERENCES products(id),
+                  quantity INTEGER NOT NULL,
+                  total_price DECIMAL(10,2) NOT NULL,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );"
+
+              if [ $? -eq 0 ]; then
+                echo "✓ Orders table created successfully"
+              else
+                echo "✗ Failed to create orders table"
+                exit 1
+              fi
+
+              # Insert sample data
+              echo ""
+              echo "Migration 4: Inserting sample data..."
+              PGPASSWORD="{{ .Values.migrations.postgres.password }}" psql \
+                -h {{ .Values.migrations.postgres.host }} \
+                -p {{ .Values.migrations.postgres.port }} \
+                -U {{ .Values.migrations.postgres.user }} \
+                -d {{ .Values.migrations.postgres.database }} \
+                -c "INSERT INTO users (username, email) VALUES
+                  ('alice', 'alice@example.com'),
+                  ('bob', 'bob@example.com')
+                  ON CONFLICT (username) DO NOTHING;"
+
+              if [ $? -eq 0 ]; then
+                echo "✓ Sample users inserted"
+              else
+                echo "✗ Failed to insert sample users"
+                exit 1
+              fi
+
+              PGPASSWORD="{{ .Values.migrations.postgres.password }}" psql \
+                -h {{ .Values.migrations.postgres.host }} \
+                -p {{ .Values.migrations.postgres.port }} \
+                -U {{ .Values.migrations.postgres.user }} \
+                -d {{ .Values.migrations.postgres.database }} \
+                -c "INSERT INTO products (name, price, stock) VALUES
+                  ('Widget', 9.99, 100),
+                  ('Gadget', 19.99, 50)
+                  ON CONFLICT DO NOTHING;"
+
+              if [ $? -eq 0 ]; then
+                echo "✓ Sample products inserted"
+              else
+                echo "✗ Failed to insert sample products"
+                exit 1
+              fi
+
+              echo ""
+              echo "==================================="
+              echo "✓ All migrations completed successfully!"
+              echo "==================================="
+
+              # Summary
+              echo ""
+              echo "Database Summary:"
+              echo "-----------------"
+              PGPASSWORD="{{ .Values.migrations.postgres.password }}" psql \
+                -h {{ .Values.migrations.postgres.host }} \
+                -p {{ .Values.migrations.postgres.port }} \
+                -U {{ .Values.migrations.postgres.user }} \
+                -d {{ .Values.migrations.postgres.database }} \
+                -c "SELECT 'Users: ' || COUNT(*) FROM users; SELECT 'Products: ' || COUNT(*) FROM products;"
+
+              exit 0
+          env:
+            - name: PGPASSWORD
+              value: {{ .Values.migrations.postgres.password | quote }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

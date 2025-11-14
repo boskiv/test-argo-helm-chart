@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Kubernetes Helm chart (`load-chart`) that deploys a PostgreSQL connectivity test Job. The chart demonstrates ArgoCD sync waves by ensuring PostgreSQL (and optionally RabbitMQ) dependencies are healthy before running the test job. The chart follows Helm v2 API conventions.
+This is a Kubernetes Helm chart (`load-chart`) that demonstrates ArgoCD sync waves with database migrations. The chart deploys PostgreSQL, runs database migrations, and then verifies the migrations with a test job. Each phase uses sync waves to ensure proper ordering. The chart follows Helm v2 API conventions.
 
 ## Common Commands
 
@@ -52,8 +52,9 @@ helm uninstall my-release
 
 The chart deploys these Kubernetes resources:
 
-- **Job**: PostgreSQL connectivity test that executes `SELECT 1` and exits
-- **ServiceAccount**: Dedicated pod identity for the job
+- **Migrations Job**: Runs SQL migrations to create database schema and sample data
+- **Test Job**: Verifies migrations were applied correctly
+- **ServiceAccount**: Dedicated pod identity for jobs
 
 ### Template Structure
 
@@ -74,24 +75,44 @@ Both dependencies can be disabled by setting `postgresql.enabled: false` or `rab
 
 All configuration is driven by `values.yaml`. Key sections:
 
-- **job.image**: PostgreSQL client image (default: `postgres:16-alpine`)
-- **job.postgres**: PostgreSQL connection details (host, port, database, user, password)
+- **migrations.image**: PostgreSQL client image for migrations (default: `postgres:16-alpine`)
+- **migrations.postgres**: PostgreSQL connection details for migrations
+- **migrations.backoffLimit**: Number of retry attempts before marking job as failed (default: 3)
+- **migrations.ttlSecondsAfterFinished**: Time to keep completed jobs before cleanup (default: 300 seconds)
+- **job.image**: PostgreSQL client image for tests (default: `postgres:16-alpine`)
+- **job.postgres**: PostgreSQL connection details for tests
 - **job.backoffLimit**: Number of retry attempts before marking job as failed (default: 3)
 - **job.ttlSecondsAfterFinished**: Time to keep completed jobs before cleanup (default: 300 seconds)
-- **resources**: CPU/memory limits and requests for the job container
+- **resources**: CPU/memory limits and requests for job containers
 - **securityContext**: Pod and container security settings
 - **postgresql.enabled**: Enable/disable PostgreSQL dependency (default: true)
 - **rabbitmq.enabled**: Enable/disable RabbitMQ dependency (default: true)
 
 ### Job Behavior
 
-The Job ([templates/job.yaml](templates/job.yaml)):
-1. Waits for PostgreSQL to be ready using `pg_isready` (30 second timeout)
-2. Executes `SELECT 1` against the PostgreSQL database
-3. Exits with code 0 on success, 1 on failure
-4. Automatically cleaned up 5 minutes after completion (configurable via `job.ttlSecondsAfterFinished`)
+#### Migrations Job ([templates/migrations-job.yaml](templates/migrations-job.yaml))
+1. Waits for PostgreSQL to be ready using `pg_isready` (60 second timeout)
+2. Creates database schema:
+   - `users` table (id, username, email, created_at)
+   - `products` table (id, name, price, stock, created_at)
+   - `orders` table (id, user_id, product_id, quantity, total_price, created_at) with foreign keys
+3. Inserts sample data (2 users, 2 products)
+4. Exits with code 0 on success, 1 on failure
+5. Automatically cleaned up 5 minutes after completion
 
-The job uses the official PostgreSQL Alpine image which includes `psql` and `pg_isready` utilities.
+#### Test Job ([templates/job.yaml](templates/job.yaml))
+1. Waits for PostgreSQL to be ready using `pg_isready` (30 second timeout)
+2. Runs 6 verification tests:
+   - Basic connectivity (SELECT 1)
+   - Verifies `users` table exists
+   - Verifies `products` table exists
+   - Verifies `orders` table exists
+   - Verifies sample data (at least 2 users and 2 products)
+   - Verifies foreign key constraints (2 foreign keys on orders table)
+3. Exits with code 0 if all tests pass, 1 on any failure
+4. Automatically cleaned up 5 minutes after completion
+
+Both jobs use the official PostgreSQL Alpine image which includes `psql` and `pg_isready` utilities.
 
 ## Important Files
 
@@ -102,37 +123,49 @@ The job uses the official PostgreSQL Alpine image which includes `psql` and `pg_
 
 ## Testing
 
-The chart includes a Helm test in `templates/tests/test-connection.yaml` for basic connectivity testing. The main PostgreSQL connectivity test is performed by the Job resource itself.
+The chart includes a Helm test in `templates/tests/test-connection.yaml` for basic PostgreSQL connectivity testing using `pg_isready`.
 
 ## ArgoCD Integration
 
-The chart is configured with ArgoCD sync waves to control deployment order and ensure dependencies are healthy before the main application starts.
+The chart is configured with ArgoCD sync waves to demonstrate a complete migration workflow with proper ordering.
 
 ### Sync Wave Strategy
 
-- **Wave 0**: ServiceAccount, PostgreSQL, and RabbitMQ (if enabled) deploy first
-- **Wave 1**: PostgreSQL test Job runs after dependencies are healthy
+- **Wave 0**: ServiceAccount, PostgreSQL, and RabbitMQ (if enabled) deploy first and become healthy
+- **Wave 1**: Migrations Job runs and creates database schema + sample data
+- **Wave 2**: Test Job verifies migrations were applied correctly
+
+This ensures:
+1. Database is fully ready before migrations run
+2. Migrations complete successfully before tests run
+3. Tests validate the entire migration workflow
 
 ### Configuration
 
 Sync waves are configured via annotations in the templates:
 
 - **ServiceAccount** ([templates/serviceaccount.yaml:9](templates/serviceaccount.yaml#L9)): `sync-wave: "0"`
-- **Job** ([templates/job.yaml:6](templates/job.yaml#L6)): `sync-wave: "1"` (customizable via `argocd.job.syncWave` in values.yaml)
+- **Migrations Job** ([templates/migrations-job.yaml:9](templates/migrations-job.yaml#L9)): `sync-wave: "1"` (customizable via `argocd.migrations.syncWave` in values.yaml)
+- **Test Job** ([templates/job.yaml:9](templates/job.yaml#L9)): `sync-wave: "2"` (customizable via `argocd.job.syncWave` in values.yaml)
 
-Dependencies (PostgreSQL and RabbitMQ) use `commonAnnotations` in [values.yaml](values.yaml#L189-L190) to set `sync-wave: "0"` on all their resources.
+Dependencies (PostgreSQL and RabbitMQ) use `commonAnnotations` in values.yaml to set `sync-wave: "0"` on all their resources.
 
 ### Customizing Sync Waves
 
-To customize the job sync wave in your values file:
+To customize sync waves in your values file:
 
 ```yaml
 argocd:
+  migrations:
+    syncWave: 1  # Run migrations in wave 1 (default)
   job:
-    syncWave: 2  # Run job in wave 2 instead of wave 1
+    syncWave: 2  # Run tests in wave 2 (default)
 ```
 
-ArgoCD will wait for each wave to become healthy before proceeding to the next wave. This ensures PostgreSQL is fully ready (StatefulSet healthy, pods running, health checks passing) before the test job executes.
+ArgoCD will wait for each wave to become healthy before proceeding to the next wave. This ensures:
+- PostgreSQL is fully ready (StatefulSet healthy, pods running, health checks passing) before migrations execute
+- Migrations complete successfully (Job status: Completed) before tests run
+- Tests validate the complete migration workflow
 
 ### Example ArgoCD Application
 
