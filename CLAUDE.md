@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Kubernetes Helm chart (`load-chart`) for deploying applications with PostgreSQL and RabbitMQ backend services. The chart follows Helm v2 API conventions and supports modern Kubernetes features including Gateway API.
+This is a Kubernetes Helm chart (`load-chart`) that deploys a PostgreSQL connectivity test Job. The chart demonstrates ArgoCD sync waves by ensuring PostgreSQL (and optionally RabbitMQ) dependencies are healthy before running the test job. The chart follows Helm v2 API conventions.
 
 ## Common Commands
 
@@ -52,12 +52,8 @@ helm uninstall my-release
 
 The chart deploys these Kubernetes resources:
 
-- **Deployment**: Main workload with configurable replicas
-- **Service**: ClusterIP service (default port 80)
-- **ServiceAccount**: Dedicated pod identity
-- **Ingress** (conditional): Traditional ingress controller routing
-- **HTTPRoute** (conditional): Gateway API routing (mutually exclusive with Ingress)
-- **HorizontalPodAutoscaler** (conditional): CPU/memory-based autoscaling
+- **Job**: PostgreSQL connectivity test that executes `SELECT 1` and exits
+- **ServiceAccount**: Dedicated pod identity for the job
 
 ### Template Structure
 
@@ -76,27 +72,26 @@ Both dependencies can be disabled by setting `postgresql.enabled: false` or `rab
 
 ### Configuration Pattern
 
-All configuration is driven by `values.yaml` (189 lines). Key sections:
+All configuration is driven by `values.yaml`. Key sections:
 
-- **image**: Container image, tag, pull policy, and secrets
-- **replicaCount**: Manual replica setting (ignored if HPA enabled)
-- **autoscaling**: HPA configuration
-- **service**: Service type and port configuration
-- **ingress/httproute**: Routing configuration (use one or the other, not both)
-- **resources**: CPU/memory limits and requests
+- **job.image**: PostgreSQL client image (default: `postgres:16-alpine`)
+- **job.postgres**: PostgreSQL connection details (host, port, database, user, password)
+- **job.backoffLimit**: Number of retry attempts before marking job as failed (default: 3)
+- **job.ttlSecondsAfterFinished**: Time to keep completed jobs before cleanup (default: 300 seconds)
+- **resources**: CPU/memory limits and requests for the job container
 - **securityContext**: Pod and container security settings
-- **livenessProbe/readinessProbe**: Health check configuration
+- **postgresql.enabled**: Enable/disable PostgreSQL dependency (default: true)
+- **rabbitmq.enabled**: Enable/disable RabbitMQ dependency (default: true)
 
-When modifying templates, always check if the feature should be conditional based on values (use `{{- if .Values.featureName.enabled }}`).
+### Job Behavior
 
-### Ingress vs HTTPRoute
+The Job ([templates/job.yaml](templates/job.yaml)):
+1. Waits for PostgreSQL to be ready using `pg_isready` (30 second timeout)
+2. Executes `SELECT 1` against the PostgreSQL database
+3. Exits with code 0 on success, 1 on failure
+4. Automatically cleaned up 5 minutes after completion (configurable via `job.ttlSecondsAfterFinished`)
 
-The chart supports two routing methods (mutually exclusive):
-
-- **Ingress** (`ingress.enabled: true`): Traditional Kubernetes ingress
-- **HTTPRoute** (`httproute.enabled: true`): Gateway API for advanced routing
-
-Enable only one at a time. HTTPRoute requires Gateway API CRDs installed in the cluster.
+The job uses the official PostgreSQL Alpine image which includes `psql` and `pg_isready` utilities.
 
 ## Important Files
 
@@ -107,7 +102,7 @@ Enable only one at a time. HTTPRoute requires Gateway API CRDs installed in the 
 
 ## Testing
 
-The chart includes a Helm test in `templates/tests/test-connection.yaml` that validates service connectivity using wget. The test runs as a post-install hook and can be executed with `helm test <release-name>`.
+The chart includes a Helm test in `templates/tests/test-connection.yaml` for basic connectivity testing. The main PostgreSQL connectivity test is performed by the Job resource itself.
 
 ## ArgoCD Integration
 
@@ -115,31 +110,35 @@ The chart is configured with ArgoCD sync waves to control deployment order and e
 
 ### Sync Wave Strategy
 
-- **Wave 0**: ServiceAccount, PostgreSQL, and RabbitMQ deploy first
-- **Wave 1**: Main Deployment and Service deploy after dependencies are healthy
-- **Wave 2**: Ingress, HTTPRoute, and HPA deploy last (if enabled)
+- **Wave 0**: ServiceAccount, PostgreSQL, and RabbitMQ (if enabled) deploy first
+- **Wave 1**: PostgreSQL test Job runs after dependencies are healthy
 
 ### Configuration
 
 Sync waves are configured via annotations in the templates:
 
 - **ServiceAccount** ([templates/serviceaccount.yaml:9](templates/serviceaccount.yaml#L9)): `sync-wave: "0"`
-- **Deployment** ([templates/deployment.yaml:8](templates/deployment.yaml#L8)): `sync-wave: "1"` (customizable via `argocd.deployment.syncWave` in values.yaml)
-- **Service** ([templates/service.yaml:8](templates/service.yaml#L8)): `sync-wave: "1"`
-- **Ingress** ([templates/ingress.yaml:9](templates/ingress.yaml#L9)): `sync-wave: "2"`
-- **HTTPRoute** ([templates/httproute.yaml:11](templates/httproute.yaml#L11)): `sync-wave: "2"`
-- **HPA** ([templates/hpa.yaml:9](templates/hpa.yaml#L9)): `sync-wave: "2"`
+- **Job** ([templates/job.yaml:6](templates/job.yaml#L6)): `sync-wave: "1"` (customizable via `argocd.job.syncWave` in values.yaml)
 
-Dependencies (PostgreSQL and RabbitMQ) use `commonAnnotations` in [values.yaml](values.yaml#L177-L178) to set `sync-wave: "0"` on all their resources.
+Dependencies (PostgreSQL and RabbitMQ) use `commonAnnotations` in [values.yaml](values.yaml#L189-L190) to set `sync-wave: "0"` on all their resources.
 
 ### Customizing Sync Waves
 
-To customize the deployment sync wave in your values file:
+To customize the job sync wave in your values file:
 
 ```yaml
 argocd:
-  deployment:
-    syncWave: 2  # Deploy application in wave 2 instead of wave 1
+  job:
+    syncWave: 2  # Run job in wave 2 instead of wave 1
 ```
 
-ArgoCD will wait for each wave to become healthy (pods running, health checks passing) before proceeding to the next wave. This ensures PostgreSQL and RabbitMQ are fully ready before the application deployment starts.
+ArgoCD will wait for each wave to become healthy before proceeding to the next wave. This ensures PostgreSQL is fully ready (StatefulSet healthy, pods running, health checks passing) before the test job executes.
+
+### Example ArgoCD Application
+
+The repository includes [argocd-application.yaml](argocd-application.yaml) - an ArgoCD Application manifest configured to deploy this chart from `https://github.com/boskiv/test-argo-helm-chart.git` with PostgreSQL and RabbitMQ dependencies disabled by default.
+
+To deploy:
+```bash
+kubectl apply -f argocd-application.yaml
+```

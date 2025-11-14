@@ -1,0 +1,75 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: load-chart
+  namespace: argocd
+  # Finalizer ensures proper cleanup when the Application is deleted
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  # Project name (default is typically used for non-production)
+  project: default
+
+  # Source configuration - your Helm chart repository
+  source:
+    repoURL: https://github.com/boskiv/test-argo-helm-chart.git
+    targetRevision: HEAD  # Can be changed to a specific branch, tag, or commit
+    path: .  # Path to the chart in the repository (root directory)
+
+    # Helm-specific configuration
+    helm:
+      releaseName: load-chart
+      values: |
+        rabbitmq:
+          enabled: false
+        postgresql:
+          enabled: false
+      # Values file overrides (optional)
+      # valueFiles:
+      #   - values.yaml
+
+      # Inline value overrides (optional)
+      # values: |
+      #   replicaCount: 2
+      #   image:
+      #     repository: your-app
+      #     tag: "1.0.0"
+
+      # Parameter overrides (optional)
+      # parameters:
+      #   - name: replicaCount
+      #     value: "2"
+
+  # Destination cluster and namespace
+  destination:
+    server: https://kubernetes.default.svc  # In-cluster deployment
+    namespace: default  # Change to your target namespace
+
+  # Sync policy configuration
+  syncPolicy:
+    # Automated sync (optional - remove if you want manual sync)
+    automated:
+      prune: true  # Delete resources that are no longer defined in Git
+      selfHeal: true  # Automatically sync when cluster state differs from Git
+      allowEmpty: false  # Prevent deletion of all resources
+
+    # Sync options
+    syncOptions:
+      - CreateNamespace=true  # Automatically create the namespace if it doesn't exist
+      - PrunePropagationPolicy=foreground  # Wait for resources to be deleted before removing dependents
+      - PruneLast=true  # Prune resources as the last step of sync
+
+    # Retry configuration for failed syncs
+    retry:
+      limit: 5  # Number of retry attempts
+      backoff:
+        duration: 5s  # Initial retry delay
+        factor: 2  # Multiply delay by this factor for each retry
+        maxDuration: 3m  # Maximum retry delay
+
+  # Ignore differences in certain fields (optional)
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas  # Ignore if HPA is managing replicas

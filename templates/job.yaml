@@ -1,0 +1,112 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "load-chart.fullname" . }}
+  labels:
+    {{- include "load-chart.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    {{- with .Values.argocd.job.syncWave }}
+    argocd.argoproj.io/sync-wave: {{ . | quote }}
+    {{- end }}
+spec:
+  # Keep the last 3 successful and failed jobs for debugging
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "load-chart.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "load-chart.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: postgres-test
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.job.image.repository }}:{{ .Values.job.image.tag }}"
+          imagePullPolicy: {{ .Values.job.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Testing PostgreSQL connection..."
+              echo "Host: {{ .Values.job.postgres.host }}"
+              echo "Port: {{ .Values.job.postgres.port }}"
+              echo "Database: {{ .Values.job.postgres.database }}"
+              echo "User: {{ .Values.job.postgres.user }}"
+              echo ""
+
+              # Wait for PostgreSQL to be ready (with timeout)
+              echo "Waiting for PostgreSQL to be ready..."
+              TIMEOUT=30
+              ELAPSED=0
+
+              until pg_isready -h {{ .Values.job.postgres.host }} -p {{ .Values.job.postgres.port }} -U {{ .Values.job.postgres.user }} > /dev/null 2>&1; do
+                if [ $ELAPSED -ge $TIMEOUT ]; then
+                  echo "ERROR: PostgreSQL is not ready after ${TIMEOUT} seconds"
+                  exit 1
+                fi
+                echo "PostgreSQL is unavailable - waiting... (${ELAPSED}s/${TIMEOUT}s)"
+                sleep 2
+                ELAPSED=$((ELAPSED + 2))
+              done
+
+              echo "PostgreSQL is ready!"
+              echo ""
+
+              # Execute SELECT 1 query
+              echo "Executing: SELECT 1;"
+              PGPASSWORD="{{ .Values.job.postgres.password }}" psql \
+                -h {{ .Values.job.postgres.host }} \
+                -p {{ .Values.job.postgres.port }} \
+                -U {{ .Values.job.postgres.user }} \
+                -d {{ .Values.job.postgres.database }} \
+                -c "SELECT 1;" \
+                -t
+
+              if [ $? -eq 0 ]; then
+                echo ""
+                echo "SUCCESS: PostgreSQL connection test passed!"
+                exit 0
+              else
+                echo ""
+                echo "ERROR: PostgreSQL connection test failed!"
+                exit 1
+              fi
+          env:
+            - name: PGPASSWORD
+              value: {{ .Values.job.postgres.password | quote }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
