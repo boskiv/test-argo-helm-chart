@@ -131,6 +131,29 @@ argocd:
     # Sync wave for the cleanup job (default: 3)
     # Cleanup runs after tests complete successfully
     syncWave: 3
+  notification:
+    # Sync wave for the notification job (default: 3)
+    # Notifications sent after tests complete (success or failure)
+    syncWave: 3
+
+# Notification job configuration - sends Slack notifications about test results
+notification:
+  enabled: false  # Set to true to enable Slack notifications
+
+  # Notification job image (curl for sending HTTP requests)
+  image:
+    repository: curlimages/curl
+    tag: "8.5.0"
+    pullPolicy: IfNotPresent
+
+  # Slack webhook URL for sending notifications
+  # Create a webhook at: https://api.slack.com/messaging/webhooks
+  slackWebhookUrl: ""  # Must be set to a valid Slack webhook URL
+
+  # Notification job behavior settings
+  backoffLimit: 2  # Number of retries before marking job as failed
+  ttlSecondsAfterFinished: 60  # Delete job 1 minute after completion
+  waitTimeout: 300  # Maximum time to wait for test job to complete (seconds)
 
 # PostgreSQL dependency configuration
 # More information: https://github.com/bitnami/charts/tree/main/bitnami/postgresql
